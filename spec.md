@@ -181,3 +181,36 @@ Feature: Automated eligibility decision
     And I should see that I do not meet the enrollment requirement
     And I should see that I do not meet the satisfactory academic progress requirement
 ```
+
+# Nonfunctional Requirements
+
+## NFR-01: Financial Transaction Integrity
+- **NFR-001.1:** The system shall perform the LoanFund balance check and the fund reservation (FR-002.5) as a single atomic operation, so that concurrent approvals can never together exceed the available balance.
+- **NFR-001.2:** The system shall make every money-moving operation (reservation, release, Disbursement, Payment crediting) idempotent, so that a retried request never creates a duplicate effect.
+- **NFR-001.3:** The system shall represent every MonetaryAmount using exact decimal arithmetic, never floating point.
+- **NFR-001.4:** At all times, each LoanFund balance shall equal its initial capital minus active reservations minus disbursed principal plus repaid principal, with zero unexplained discrepancy.
+
+## NFR-02: Security and Privacy
+- **NFR-002.1:** The system shall encrypt all student and financial data in transit and at rest.
+- **NFR-002.2:** The system shall enforce role-based access: a Student may view only their own records; a FinancialAidOfficer may view only the records needed to perform their role.
+- **NFR-002.3:** The system shall require multi-factor authentication for FinancialAidOfficer accounts.
+- **NFR-002.4:** The system shall not store card or bank account numbers; payment details shall be tokenized by a PCI DSS–compliant payment processor.
+- **NFR-002.5:** The system shall handle student data in accordance with FERPA and the GLBA Safeguards Rule, and access permissions shall be reviewed quarterly.
+
+## NFR-03: Complete, Tamper-Evident Audit Trail
+- **NFR-003.1:** The system shall create an AuditRecord for every state change, including automated and manual Decisions, EligibilityRule outcomes, fund reservations and releases, signatures, Disbursements, Payments, and configuration changes.
+- **NFR-003.2:** Each AuditRecord shall contain the actor (system or user), timestamp, prior state, new state, and the EligibilityRule version in effect.
+- **NFR-003.3:** AuditRecords shall be append-only; no application role shall be able to edit or delete them.
+- **NFR-003.4:** Any Decision shall be reproducible from the AuditRecords alone.
+
+## NFR-04: Legal Enforceability of Loan Agreements
+- **NFR-004.1:** The system shall capture electronic signatures in compliance with ESIGN and UETA, including the student's consent to transact electronically and their intent to sign.
+- **NFR-004.2:** The system shall store each signed LoanAgreement unaltered, with a document hash, signature timestamp, and consent record.
+- **NFR-004.3:** The student shall be able to download their signed LoanAgreement at any time during the life of the loan.
+- **NFR-004.4:** The content of the LoanAgreement and any required lending disclosures shall be approved by institutional counsel before launch.
+
+## NFR-05: Timeliness and Availability
+- **NFR-005.1:** The system shall display an eligibility Decision within 5 seconds of submission for 95% of applications.
+- **NFR-005.2:** Each synchronous SIS call (FR-001.2) shall time out after 3 seconds and be handled as described in FR-001.4.
+- **NFR-005.3:** The system shall post a Disbursement to the student's SIS tuition balance within 1 business day of the LoanAgreement being signed.
+- **NFR-005.4:** The system shall be available 99.9% of the time during the 3 weeks before each Term's tuition payment deadline.
