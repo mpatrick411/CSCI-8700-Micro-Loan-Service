@@ -50,11 +50,13 @@ As a Student,
 I want the application to calculate my tuition gap from my account balance and aid awards and let me submit a loan application for up to that amount,
 So that my funding gap is covered without borrowing more money than I need.
 
-- **FR-001.1:** The system shall calculate the tuition gap as the student's outstanding TuitionCharge balance for the current Term minus all AidAwards that are accepted but not yet disbursed. If the result is zero or negative, the student shall not be able to apply.
+- **FR-001.1:** The system shall calculate the tuition gap as the student's outstanding TuitionCharge balance for the current Term (charges minus payments and aid already posted) minus all AidAwards that are accepted but not yet disbursed. If the result is zero or negative, the student shall not be able to apply.
 - **FR-001.2:** The system shall retrieve the student's TuitionCharge balance and AidAwards from the Student Information System (SIS) through a synchronous API call at the moment the application is started and again at submission.
 - **FR-001.3:** The system shall reject a requested amount that is greater than the tuition gap, greater than the maximum loan amount (configurable, default $1,500), or less than the minimum loan amount (configurable, default $100).
 - **FR-001.4:** If the SIS is unavailable or returns incomplete data, the system shall not allow submission and shall tell the student to try again later.
 - **FR-001.5:** The SIS shall be the source of truth for tuition balances and aid awards. The system shall be the source of truth for loans, agreements, and loan payments.
+- **FR-001.6:** A student shall have at most one active LoanApplication or Loan per Term. An application is active unless it has been denied or has expired; a Loan is active until it is fully repaid.
+- **FR-001.7:** The SIS shall own registration holds. The system shall read a student's hold status but shall never change it; the SIS lifts the hold once the Disbursement posts to the student's tuition balance.
   
 ## FR 02: Receive an automated decision and disbursement
 As a Student,
@@ -64,8 +66,13 @@ So that my tuition is covered quickly without waiting on manual processing.
 - **FR-002.1:** The system shall evaluate every submitted application against each EligibilityRule and assign each rule one of three outcomes: Pass, Fail, or Escalate.
 - **FR-002.2:** The system shall decide the application as follows: if any rule returns Fail, the application is denied; otherwise, if any rule returns Escalate, the application is escalated to a FinancialAidOfficer; otherwise, the application is approved.
 - **FR-002.3:** A denial shall state every rule that returned Fail, in plain language.
-- **FR-002.4:** A denied student shall be able to submit one appeal within 7 days (configurable) of the decision. An appeal creates an ExceptionReview and routes the application to a FinancialAidOfficer.
+- **FR-002.4:** A denied student shall be able to submit one appeal within 7 days (configurable) of the decision. An appeal creates an ExceptionReview and routes the application to a FinancialAidOfficer. An appeal does not re-run the EligibilityRules.
 - **FR-002.5:** When an application is approved, the system shall reserve the requested amount from the LoanFund until the LoanAgreement is signed or the application expires (see FR-004.3).
+**FR-002.6:** The system shall apply the following EligibilityRules. Thresholds shall be configurable, and each EligibilityAssessment shall record the rule-set version in effect.
++  - **Enrollment:** Pass at 6 or more credits for the Term; Escalate at 3–5 credits; Fail below 3 credits.
++  - **Satisfactory Academic Progress (SAP):** Pass if "Meeting"; Escalate if "Warning"; Fail if "Suspended".
++  - **Fund availability:** Pass if the LoanFund's available balance covers the requested amount; otherwise Fail. This rule never returns Escalate.
++  - **No overdue loans:** Pass if the student has no Loan with an overdue payment (see FR-006.3); otherwise Fail.
 
 ## FR 03: Review and override edge cases
 As a Financial Aid Officer,
@@ -76,6 +83,7 @@ So that edge-case holds are resolved in time and institutional fairness is uphel
 - **FR-003.2:** An officer shall not be able to approve or deny without entering a rationale.
 - **FR-003.3:** An officer may override a Fail or Escalate outcome on any rule except Fund availability. An officer shall not approve a loan the LoanFund cannot cover (see FR-006.1).
 - **FR-003.4:** Every manual decision shall create an AuditRecord containing the officer, timestamp, decision, rationale, and the rule outcomes at the time of the decision.
+- **FR-003.5:** An ExceptionReview that is not resolved by the student's tuition payment deadline for the Term shall expire, and the application shall be denied with the reason "Review not completed before the payment deadline."
 
 ## FR-004: Loan Acceptance
 - **FR-004.1:** The system shall generate a loan agreement containing the loan amount and repayment terms for every approved applicant.
@@ -83,14 +91,14 @@ So that edge-case holds are resolved in time and institutional fairness is uphel
 - **FR-004.3:** The system shall expire an approved application if the agreement is not signed within a set number of days, and release any reserved funds for the loan plan.
 
 ## FR-005: Repayment
-- **FR-005.1:** The system shall create a repayment schedule for each loan when the loan is issued.
+- **FR-005.1:** The system shall create a RepaymentSchedule for each loan when the loan is issued: 0% interest, no fees, and 4 equal monthly installments (configurable), with the first due 30 days after Disbursement. Any remainder cents shall be added to the final installment.
 - **FR-005.2:** The system shall allow students to make one-time payments or enroll in automatic payment plans, similarly to tuition payments.
 - **FR-005.3:** The system shall send the student a reminder a configurable number of days before each payment is due.
 
 ## FR-006: Fund and Risk Management
 - **FR-006.1:** The system shall not approve a loan whose amount exceeds the available balance of its loan fund or the student's tuition gap.
 - **FR-006.2:** The system shall credit each student's payment back to the origination loan fund.
-- **FR-006.3:** The system shall flag loans with overdue payments for financial officer follow-up.
+- **FR-006.3:** The system shall mark a payment overdue when it is 10 days (configurable) past its due date, and shall flag the Loan for FinancialAidOfficer follow-up.
 
 # Acceptance Criteria
 
@@ -104,8 +112,8 @@ Feature: Apply for a tuition microloan
 
   Background:
     Given I am logged in as a Student
-    And I have a tuition charge of $4,000 for the Fall 2026 term
-    And I have aid awards totaling $3,400 for the Fall 2026 term
+    And I have an outstanding tuition balance of $4,000 for the Fall 2026 term
+    And I have accepted, undisbursed aid awards totaling $3,400 for the Fall 2026 term
 
   Scenario: Student sees their calculated tuition gap
     When I start a loan application for the Fall 2026 term
@@ -154,8 +162,8 @@ Feature: Automated eligibility decision
 
   Background:
     Given I am logged in as a Student
-    And I have a tuition charge of $4,000 for the Fall 2026 term
-    And I have aid awards totaling $3,400 for the Fall 2026 term
+    And I have an outstanding tuition balance of $4,000 for the Fall 2026 term
+    And I have accepted, undisbursed aid awards totaling $3,400 for the Fall 2026 term
     And I have started a loan application for the Fall 2026 term
     And I have requested a loan of $600
     And the loan fund has an available balance of at least $600
