@@ -44,7 +44,7 @@ The table is protected by SQLite triggers that block UPDATE and DELETE (NFR-003.
 
 | Signature | Success result | Fails with | Spec rule | Injected |
 |---|---|---|---|---|
-| `current(uow) -> ConfigSnapshot` | Latest version. Defaults: min $100, max $1,500, appeal 7 d, signing 7 d, 4 installments, overdue 10 d, enrollment 6/3 credits. Reminder days has no spec default and must be seeded | — | FR-001.3, FR-002.4, FR-004.3, FR-005.1, FR-005.3, FR-006.3 | uow |
+| `current(uow) -> ConfigSnapshot` | Latest version. Defaults: min $100, max $1,500, appeal 7 d, signing 7 d, 4 installments, reminder 3 d, overdue 10 d, enrollment 6/3 credits | — | FR-001.3, FR-002.4, FR-004.3, FR-005.1, FR-005.3, FR-006.3 | uow |
 | `rule_set(uow) -> RuleSetThresholds` | Thresholds plus `version` | — | FR-002.6 | uow |
 | `update(uow, *, changes: Mapping[ConfigKey, str], actor, clock) -> ConfigSnapshot` | New version (and new rule-set version if a threshold changed), audited | `UnknownConfigKey`, `InvalidConfigValue` (bad type, min > max, escalate ≥ pass) | FR-002.6, NFR-003.1 | uow, clock |
 | `advance_clock(uow, *, clock: AdjustableClock, by: timedelta, actor) -> datetime` | Clock moved, move audited | `ValueError` if `by` ≤ 0 | admin "advance time" (preference), NFR-003.1 | uow, clock |
@@ -75,12 +75,14 @@ Port `IdentityProvider`: `resolve(user_ref: str) -> CurrentUser | None`, `list_u
 
 | Signature | Success result | Fails with | Spec rule | Injected |
 |---|---|---|---|---|
-| `open(uow, *, kind, application_id, student_id, term_id, payment_deadline: date, requested_amount, tuition_gap, pending_aid_total, rule_outcomes: tuple[RuleOutcomeView, ...], student_explanation: str \| None, actor, clock) -> ExceptionReview` | OPEN review, audited | `ReviewAlreadyOpen` | FR-002.2 (escalate), FR-002.4 (appeal) | uow, clock |
+| `open(uow, *, kind, application_id, student_id, term_id, payment_deadline: date, requested_amount, tuition_gap, pending_aid_total, aid_awards: tuple[AidAwardView, ...], rule_outcomes: tuple[RuleOutcomeView, ...], student_explanation: str \| None, actor, clock) -> ExceptionReview` | OPEN review, audited. Gap, `aid_awards` and `rule_outcomes` are the snapshot from the application's submission | `ReviewAlreadyOpen` | FR-002.2 (escalate), FR-002.4 (appeal), FR-003.1 | uow, clock |
 | `get(uow, *, review_id) -> ExceptionReview` | The review | `ReviewNotFound` | FR-003.1 | uow |
-| `list_open(uow) -> list[ExceptionReview]` | All OPEN reviews of both kinds, earliest `payment_deadline` first | — | FR-003.1 | uow |
+| `list_open(uow) -> list[ExceptionReview]` | All OPEN reviews of both kinds, earliest `payment_deadline` first; each carries the tuition gap, `aid_awards`, and every rule outcome that is Escalate or Fail | — | FR-003.1 | uow |
 | `resolve(uow, *, review_id, decision: ReviewDecision, rationale: str, officer_id: UserId, clock) -> ExceptionReview` | Compare-and-set OPEN → RESOLVED | `MissingRationale` (blank), `ReviewNotOpen` (lost the race), `ReviewNotFound` | FR-003.2 | uow, clock |
 | `find_expired(uow, *, clock) -> list[ExceptionReview]` | OPEN reviews past their deadline | — | FR-003.5 | uow, clock |
 | `expire(uow, *, review_id, actor, clock) -> ExceptionReview` | Compare-and-set OPEN → EXPIRED | `ReviewNotOpen`, `ReviewNotFound` | FR-003.5 | uow, clock |
+
+`AidAwardView` (in `review/models.py`, alongside `RuleOutcomeView`): `name: str`, `amount: Money`, `status: str` (accepted / disbursed), copied from the SIS `StudentTermData` at submission so `review` keeps no dependency on `applications`.
 
 ### ledger
 
@@ -100,18 +102,18 @@ Port `IdentityProvider`: `resolve(user_ref: str) -> CurrentUser | None`, `list_u
 
 | Signature | Success result | Fails with | Spec rule | Injected |
 |---|---|---|---|---|
-| `split_installments(principal: Money, count: int) -> tuple[Money, ...]` | Equal parts, remainder cents on the last (pure) | `ValueError` if count < 1 | FR-005.1 | — |
+| `split_installments(principal: Money, count: int) -> tuple[Money, ...]` | Each part = `principal / count` rounded down to the cent; remainder cents added to the last (pure) | `ValueError` if count < 1 | FR-005.1 | — |
 | `create_loan(uow, *, application_id, student_id, term_id, fund_id, principal, actor, clock) -> Loan` | ACTIVE loan + schedule with amounts, no dates | `LoanAlreadyExists` | FR-005.1 | uow, clock, config |
-| `set_due_dates(uow, *, loan_id, posted_at: datetime, actor, clock) -> RepaymentSchedule` | First due 30 days after `posted_at`, then monthly | `LoanNotFound`, `DueDatesAlreadySet` | FR-005.1 | uow, clock |
+| `set_due_dates(uow, *, loan_id, posted_at: datetime, actor, clock) -> RepaymentSchedule` | First due 30 days after `posted_at`; each later installment due 30 days after the previous | `LoanNotFound`, `DueDatesAlreadySet` | FR-005.1 | uow, clock |
 | `get_loan(uow, *, loan_id, student_id: StudentId \| None) -> Loan` | The loan | `LoanNotFound` | NFR-002.2 | uow |
 | `list_loans(uow, *, student_id) -> list[Loan]` | Student's loans | — | NFR-002.2 | uow |
 | `get_schedule(uow, *, loan_id, student_id) -> RepaymentSchedule` | Schedule (0% interest) | `LoanNotFound` | FR-005.1 | uow |
 | `has_active_loan(uow, *, student_id, term_id) -> bool` | Early check for one-per-term | — | FR-001.6 | uow |
-| `has_overdue_installment(uow, *, student_id, clock) -> bool` | From due dates + clock, not only the flag | — | FR-002.6, FR-006.3 | uow, clock, config |
+| `has_overdue_installment(uow, *, student_id, clock) -> bool` | From due dates + clock, not only the flag. Overdue = unpaid and `clock.today()` is *more than* the overdue days after the due date (day 10 is not overdue, day 11 is) | — | FR-002.6, FR-006.3 | uow, clock, config |
 | `make_payment(uow, *, loan_id, student_id, amount, method_token, idempotency_key, payments: PaymentsPort, actor, clock) -> Payment` | Charged, applied to installments, credited to the fund; loan REPAID when outstanding hits 0 | `InvalidPaymentAmount`, `AmountExceedsOutstanding`, `PaymentDeclined`, `LoanNotFound`, `LoanNotActive` | FR-005.2, FR-006.2, NFR-001.2, NFR-002.4 | uow (immediate), clock, payments |
 | `enroll_autopay(uow, *, loan_id, student_id, method_token, payments, actor, clock) -> AutopayEnrollment` | Mandate recorded | `AutopayAlreadyEnrolled`, `LoanNotFound`, `LoanNotActive` | FR-005.2, NFR-002.4 | uow, clock, payments |
 | `send_due_reminders(uow, *, notifier: NotificationsPort, clock) -> list[Installment]` | One reminder per installment, N days before due | — | FR-005.3 | uow, clock, notifier, config |
-| `flag_overdue(uow, *, clock) -> list[Loan]` | Installments marked OVERDUE, loans flagged | — | FR-006.3 | uow, clock, config |
+| `flag_overdue(uow, *, clock) -> list[Loan]` | Installments unpaid *more than* the overdue days after their due date marked OVERDUE (same test as `has_overdue_installment`), loans flagged | — | FR-006.3 | uow, clock, config |
 | `list_flagged_loans(uow) -> list[Loan]` | Loans flagged for follow-up | — | FR-006.3 | uow |
 
 Ports: `PaymentsPort.charge(*, method_token, amount, idempotency_key) -> ChargeResult`, `PaymentsPort.enroll_autopay(*, method_token, loan_id, schedule) -> str` (adapter `MockPaymentsAdapter`); `NotificationsPort.send(uow, *, student_id, subject, body, idempotency_key) -> str` (adapter `OutboxNotifier`, which also has `list_for(uow, *, student_id) -> list[OutboxMessage]` for the mock inbox).
@@ -146,8 +148,8 @@ Port `ESignaturePort.render(agreement) -> RenderedDocument`, `ESignaturePort.cap
 |---|---|---|---|---|
 | `calculate_tuition_gap(data: StudentTermData) -> Money` | Balance − accepted, undisbursed aid (pure; may be ≤ 0) | — | FR-001.1 | — |
 | `validate_amount(uow, *, requested_amount, tuition_gap) -> AmountValidation` | `ok`, or `message` such as "exceeds your tuition gap of $600" | — (bad amounts are a result) | FR-001.3, AC-01 | uow, config |
-| `start(*, uow_factory, sis: SisReaderPort, student_id, term_id) -> ApplicationStart` | Gap, pending aid, min, `max_requestable = min(gap, max)`, deadline. Creates nothing | `TryAgainLater`, `NoTuitionGap`, `ActiveApplicationExists` | FR-001.1, FR-001.2, FR-001.4, FR-001.6, AC-01 | uow_factory, sis, config |
-| `submit(*, uow_factory, sis, clock, student_id, term_id, requested_amount, idempotency_key) -> SubmissionResult` | Application + decision; approved → reservation + agreement; escalated → review; denied → reasons | `TryAgainLater`, `NoTuitionGap`, `AmountOutOfRange`, `ActiveApplicationExists` | FR-001.2–001.6, FR-002.1–002.3, FR-002.5, FR-002.6, FR-004.1, FR-006.1, NFR-001.1, NFR-001.2, NFR-003.4, NFR-005.1 | uow_factory (immediate), clock, sis, config |
+| `start(*, uow_factory, sis: SisReaderPort, student_id, term_id) -> ApplicationStart` | Gap, pending aid, min, `max_requestable = min(gap, max)`, deadline. Creates nothing | `TryAgainLater`, `NoTuitionGap` (gap < configured minimum loan amount), `ActiveApplicationExists` | FR-001.1, FR-001.2, FR-001.4, FR-001.6, AC-01 | uow_factory, sis, config |
+| `submit(*, uow_factory, sis, clock, student_id, term_id, requested_amount, idempotency_key) -> SubmissionResult` | Application + decision; approved → reservation + agreement; escalated → review; denied → reasons | `TryAgainLater`, `NoTuitionGap` (recalculated gap < configured minimum), `AmountOutOfRange`, `ActiveApplicationExists` | FR-001.2–001.6, FR-002.1–002.3, FR-002.5, FR-002.6, FR-004.1, FR-006.1, NFR-001.1, NFR-001.2, NFR-003.4, NFR-005.1 | uow_factory (immediate), clock, sis, config |
 | `decide(assessment) -> DecisionOutcome` | Fail → DENIED; else Escalate → ESCALATED; else APPROVED (pure) | — | FR-002.2 | — |
 | `denial_reasons(assessment) -> tuple[str, ...]` | Reason of every failed rule (pure) | — | FR-002.3 | — |
 | `get(uow, *, application_id, student_id: StudentId \| None) -> LoanApplication` | Application with assessment and decisions | `ApplicationNotFound` | NFR-002.2 | uow |
@@ -212,7 +214,7 @@ Authentication (prototype): header `X-Dev-User: u-student-1 | u-officer-1 | u-ad
 
 | Method & path | Function | Request | Success | Spec rules |
 |---|---|---|---|---|
-| `GET /reviews` | `review.list_open` | — | 200 `ExceptionReview[]` by deadline | FR-003.1; AC-02 sc. 1 |
+| `GET /reviews` | `review.list_open` | — | 200 `ExceptionReview[]` by deadline (each with gap, aid awards, Escalate/Fail rules) | FR-003.1; AC-02 sc. 1 |
 | `GET /reviews/{review_id}` | `review.get` | — | 200 `ExceptionReview` (gap, awards, triggering rules) | FR-003 story, FR-002.4 |
 | `POST /reviews/{review_id}/resolution` | `applications.resolve_review` | `{decision: "approve"\|"deny", rationale}` | 200 `Decision` | FR-003.2–003.6, FR-006.1 |
 | `GET /officer/loans/flagged` | `repayment.list_flagged_loans` | — | 200 `Loan[]` | FR-006.3 |
