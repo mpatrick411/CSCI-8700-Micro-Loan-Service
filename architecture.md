@@ -58,7 +58,7 @@ This follows FR-001, FR-002 and AC-01 "Eligible student is automatically approve
 1. The student opens the apply page. `identity` resolves the seeded Student; the route requires the Student role.
 2. `applications.start` checks that the student has no active application or loan for the term (FR-001.6), giving early feedback; the database constraint is the actual enforcement.
 3. `applications.start` calls the SIS port with a 3 s timeout (FR-001.2, NFR-005.2). On `SisUnavailable` the student sees "try again later" and stops (FR-001.4).
-4. `applications` calculates the tuition gap (FR-001.1). It shows the gap ($600) and the maximum requestable amount, which is the smaller of the gap and the configured maximum ($600) (AC-01, first scenario). If the gap is ≤ 0, the student cannot continue. No LoanApplication exists yet (FR-001.6).
+4. `applications` calculates the tuition gap (FR-001.1). It shows the gap ($600) and the maximum requestable amount, which is the smaller of the gap and the configured maximum ($600) (AC-01, first scenario). If the gap is less than the minimum loan amount, the student cannot continue. No LoanApplication exists yet (FR-001.6).
 5. As the student types an amount, HTMX validates it against the gap and the configured min/max (FR-001.3). $900 shows the "exceeds your tuition gap of $600" message and disables submit (AC-01, last scenario).
 6. On submit, `applications` calls the SIS again (FR-001.2), recalculates the gap and revalidates the amount. Any failure stops here as in step 3. All network calls happen before step 7, so no write lock is held during I/O.
 7. `applications` opens one `BEGIN IMMEDIATE` transaction and inserts the LoanApplication. The unique index rejects a second active application.
