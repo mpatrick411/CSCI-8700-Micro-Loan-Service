@@ -28,7 +28,7 @@ Every function below exists in code with this exact signature and raises `NotImp
 | `UnitOfWork` (Protocol): `session`, `__enter__`, `__exit__`, `commit()`, `rollback()` | Commit on clean exit, rollback on exception | SQLAlchemy errors propagate | NFR-001.1, NFR-003.1 | — |
 | `UnitOfWorkFactory.__call__(*, immediate: bool = False) -> UnitOfWork` (`SqliteUnitOfWorkFactory(database_url)`) | New unit of work | — | NFR-001.1 | database URL |
 
-Also in kernel: typed ids (`StudentId`, `TermId`, `ApplicationId`, … , `Actor`, `SYSTEM_ACTOR`), `DomainError`, and `SisUnavailable`, the single error the SIS adapter raises for timeout, transport error or incomplete data.
+Also in kernel: typed ids (`StudentId`, `TermId`, `ApplicationId`, … , `Actor`, `SYSTEM_ACTOR`), `DomainError`, and `SisUnavailable`, the single error the SIS adapter raises for timeout, transport error, incomplete data or unrecognised values (e.g. an unknown SAP status, FR-001.4).
 
 ### audit
 
@@ -77,9 +77,9 @@ Port `IdentityProvider`: `resolve(user_ref: str) -> CurrentUser | None`, `list_u
 |---|---|---|---|---|
 | `open(uow, *, kind, application_id, student_id, term_id, payment_deadline: date, requested_amount, tuition_gap, pending_aid_total, aid_awards: tuple[AidAwardView, ...], rule_outcomes: tuple[RuleOutcomeView, ...], student_explanation: str \| None, actor, clock) -> ExceptionReview` | OPEN review, audited. Gap, `aid_awards` and `rule_outcomes` are the snapshot from the application's submission | `ReviewAlreadyOpen` | FR-002.2 (escalate), FR-002.4 (appeal), FR-003.1 | uow, clock |
 | `get(uow, *, review_id) -> ExceptionReview` | The review | `ReviewNotFound` | FR-003.1 | uow |
-| `list_open(uow) -> list[ExceptionReview]` | All OPEN reviews of both kinds, earliest `payment_deadline` first; each carries the tuition gap, `aid_awards`, and every rule outcome that is Escalate or Fail | — | FR-003.1 | uow |
-| `resolve(uow, *, review_id, decision: ReviewDecision, rationale: str, officer_id: UserId, clock) -> ExceptionReview` | Compare-and-set OPEN → RESOLVED | `MissingRationale` (blank), `ReviewNotOpen` (lost the race), `ReviewNotFound` | FR-003.2 | uow, clock |
-| `find_expired(uow, *, clock) -> list[ExceptionReview]` | OPEN reviews past their deadline | — | FR-003.5 | uow, clock |
+| `list_open(uow) -> list[ExceptionReview]` | All OPEN reviews of both kinds, earliest `payment_deadline` first, ties by earliest `opened_at`; each carries the tuition gap, `aid_awards`, and every rule outcome that is Escalate or Fail | — | FR-003.1 | uow |
+| `resolve(uow, *, review_id, decision: ReviewDecision, rationale: str, officer_id: UserId, clock) -> ExceptionReview` | Compare-and-set OPEN → RESOLVED | `MissingRationale` (blank or whitespace-only), `ReviewNotOpen` (lost the race), `ReviewNotFound` | FR-003.2 | uow, clock |
+| `find_expired(uow, *, clock) -> list[ExceptionReview]` | OPEN reviews whose `payment_deadline` is before `clock.today()` (the deadline date itself is still open) | — | FR-003.5 | uow, clock |
 | `expire(uow, *, review_id, actor, clock) -> ExceptionReview` | Compare-and-set OPEN → EXPIRED | `ReviewNotOpen`, `ReviewNotFound` | FR-003.5 | uow, clock |
 
 `AidAwardView` (in `review/models.py`, alongside `RuleOutcomeView`): `name: str`, `amount: Money`, `status: str` (accepted / disbursed), copied from the SIS `StudentTermData` at submission so `review` keeps no dependency on `applications`.
@@ -104,15 +104,15 @@ Port `IdentityProvider`: `resolve(user_ref: str) -> CurrentUser | None`, `list_u
 |---|---|---|---|---|
 | `split_installments(principal: Money, count: int) -> tuple[Money, ...]` | Each part = `principal / count` rounded down to the cent; remainder cents added to the last (pure) | `ValueError` if count < 1 | FR-005.1 | — |
 | `create_loan(uow, *, application_id, student_id, term_id, fund_id, principal, actor, clock) -> Loan` | ACTIVE loan + schedule with amounts, no dates | `LoanAlreadyExists` | FR-005.1 | uow, clock, config |
-| `set_due_dates(uow, *, loan_id, posted_at: datetime, actor, clock) -> RepaymentSchedule` | First due 30 days after `posted_at`; each later installment due 30 days after the previous | `LoanNotFound`, `DueDatesAlreadySet` | FR-005.1 | uow, clock |
+| `set_due_dates(uow, *, loan_id, posted_at: datetime, actor, clock) -> RepaymentSchedule` | First due 30 calendar days after the institution-local date of `posted_at`; each later installment due 30 days after the previous | `LoanNotFound`, `DueDatesAlreadySet` | FR-005.1 | uow, clock |
 | `get_loan(uow, *, loan_id, student_id: StudentId \| None) -> Loan` | The loan | `LoanNotFound` | NFR-002.2 | uow |
 | `list_loans(uow, *, student_id) -> list[Loan]` | Student's loans | — | NFR-002.2 | uow |
 | `get_schedule(uow, *, loan_id, student_id) -> RepaymentSchedule` | Schedule (0% interest) | `LoanNotFound` | FR-005.1 | uow |
 | `has_active_loan(uow, *, student_id, term_id) -> bool` | Early check for one-per-term | — | FR-001.6 | uow |
 | `has_overdue_installment(uow, *, student_id, clock) -> bool` | From due dates + clock, not only the flag. Overdue = unpaid and `clock.today()` is *more than* the overdue days after the due date (day 10 is not overdue, day 11 is) | — | FR-002.6, FR-006.3 | uow, clock, config |
-| `make_payment(uow, *, loan_id, student_id, amount, method_token, idempotency_key, payments: PaymentsPort, actor, clock) -> Payment` | Charged, applied to installments, credited to the fund; loan REPAID when outstanding hits 0 | `InvalidPaymentAmount`, `AmountExceedsOutstanding`, `PaymentDeclined`, `LoanNotFound`, `LoanNotActive` | FR-005.2, FR-006.2, NFR-001.2, NFR-002.4 | uow (immediate), clock, payments |
+| `make_payment(uow, *, loan_id, student_id, amount, method_token, idempotency_key, payments: PaymentsPort, actor, clock) -> Payment` | Charged, applied to the earliest unpaid installment first, credited to the fund; loan REPAID when outstanding hits 0 | `InvalidPaymentAmount`, `AmountExceedsOutstanding`, `PaymentDeclined`, `LoanNotFound`, `LoanNotActive` | FR-005.2, FR-006.2, NFR-001.2, NFR-002.4 | uow (immediate), clock, payments |
 | `enroll_autopay(uow, *, loan_id, student_id, method_token, payments, actor, clock) -> AutopayEnrollment` | Mandate recorded | `AutopayAlreadyEnrolled`, `LoanNotFound`, `LoanNotActive` | FR-005.2, NFR-002.4 | uow, clock, payments |
-| `send_due_reminders(uow, *, notifier: NotificationsPort, clock) -> list[Installment]` | One reminder per installment, N days before due | — | FR-005.3 | uow, clock, notifier, config |
+| `send_due_reminders(uow, *, notifier: NotificationsPort, clock) -> list[Installment]` | One reminder per unpaid installment, N calendar days before due | — | FR-005.3 | uow, clock, notifier, config |
 | `flag_overdue(uow, *, clock) -> list[Loan]` | Installments unpaid *more than* the overdue days after their due date marked OVERDUE (same test as `has_overdue_installment`), loans flagged | — | FR-006.3 | uow, clock, config |
 | `list_flagged_loans(uow) -> list[Loan]` | Loans flagged for follow-up | — | FR-006.3 | uow |
 
@@ -154,8 +154,8 @@ Port `ESignaturePort.render(agreement) -> RenderedDocument`, `ESignaturePort.cap
 | `denial_reasons(assessment) -> tuple[str, ...]` | Reason of every failed rule (pure) | — | FR-002.3 | — |
 | `get(uow, *, application_id, student_id: StudentId \| None) -> LoanApplication` | Application with assessment and decisions | `ApplicationNotFound` | NFR-002.2 | uow |
 | `list_for_student(uow, *, student_id) -> list[LoanApplication]` | Student's applications | — | NFR-002.2 | uow |
-| `appeal(uow, *, application_id, student_id, explanation: str \| None, clock) -> ExceptionReview` | APPEAL review with original outcomes; status UNDER_REVIEW | `ApplicationNotDenied`, `AppealWindowClosed`, `AppealAlreadyUsed`, `ApplicationNotFound` | FR-002.4 | uow (immediate), clock, config |
-| `resolve_review(*, uow_factory, sis, clock, review_id, officer_id: UserId, decision: ReviewDecision, rationale: str) -> Decision` | Officer decision recorded and audited; approve → reservation + agreement | `MissingRationale`, `ReviewNotOpen`, `ReviewNotFound`, `PaymentDeadlinePassed`, `TryAgainLater`, `AmountExceedsRecalculatedGap`, `FundCannotCover` | FR-003.2–003.6, FR-006.1 | uow_factory (immediate), clock, sis |
+| `appeal(uow, *, application_id, student_id, explanation: str \| None, clock) -> ExceptionReview` | APPEAL review with original outcomes; status UNDER_REVIEW | `ApplicationNotDenied`, `AppealWindowClosed` (now > decided_at + window), `AppealAlreadyUsed`, `ActiveApplicationExists` (another active application or loan for the term), `ApplicationNotFound` | FR-002.4 | uow (immediate), clock, config |
+| `resolve_review(*, uow_factory, sis, clock, review_id, officer_id: UserId, decision: ReviewDecision, rationale: str) -> Decision` | Officer decision recorded and audited; approve → SIS re-read, reservation + agreement; deny → no SIS call | `MissingRationale`, `ReviewNotOpen`, `ReviewNotFound`, `PaymentDeadlinePassed`, `TryAgainLater` (approve only), `AmountExceedsRecalculatedGap`, `FundCannotCover` (live balance, FR-003.3) | FR-003.2–003.6, FR-006.1 | uow_factory (immediate), clock, sis |
 | `expire_overdue_reviews(*, uow_factory, clock) -> list[ApplicationId]` | Reviews expired, applications denied with "Review not completed before the payment deadline." | — | FR-003.5 | uow_factory, clock |
 | `expire_unsigned(*, uow_factory, clock) -> list[ApplicationId]` | Agreements expired, applications EXPIRED, reservations released | — | FR-004.3, FR-002.5 | uow_factory, clock |
 
