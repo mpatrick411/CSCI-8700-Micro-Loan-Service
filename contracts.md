@@ -57,7 +57,7 @@ The table is protected by SQLite triggers that block UPDATE and DELETE (NFR-003.
 | `require_role(*roles: Role) -> Callable[..., CurrentUser]` | A dependency returning the user if their role is in `roles` | `Forbidden` (raised by the dependency) | NFR-002.2 | `get_current_user` |
 | `student_id_of(user: CurrentUser) -> StudentId` | The student's id | `Forbidden` if not a Student | NFR-002.2 | — |
 
-Port `IdentityProvider`: `resolve(user_ref: str) -> CurrentUser | None`, `list_users() -> list[CurrentUser]`. Adapter `SeededIdentityProvider` (three synthetic users: `u-student-1`, `u-officer-1`, `u-admin-1`).
+Port `IdentityProvider`: `resolve(user_ref: str) -> CurrentUser | None`, `list_users() -> list[CurrentUser]`. Adapter `SeededIdentityProvider` (six synthetic users: students `u-student-1`, `u-student-2`, `u-student-3`; officers `u-officer-1`, `u-officer-2`; admin `u-admin-1`).
 
 ### eligibility (pure, no I/O)
 
@@ -82,12 +82,13 @@ Port `IdentityProvider`: `resolve(user_ref: str) -> CurrentUser | None`, `list_u
 | `find_expired(uow, *, clock) -> list[ExceptionReview]` | OPEN reviews whose `payment_deadline` is before `clock.today()` (the deadline date itself is still open) | — | FR-003.5 | uow, clock |
 | `expire(uow, *, review_id, actor, clock) -> ExceptionReview` | Compare-and-set OPEN → EXPIRED | `ReviewNotOpen`, `ReviewNotFound` | FR-003.5 | uow, clock |
 
-`AidAwardView` (in `review/models.py`, alongside `RuleOutcomeView`): `name: str`, `amount: Money`, `status: str` (accepted / disbursed), copied from the SIS `StudentTermData` at submission so `review` keeps no dependency on `applications`.
+`AidAwardView` (in `review/models.py`, alongside `RuleOutcomeView`): `award_id: str`, `description: str`, `amount: Money`, `accepted: bool`, `disbursed: bool` (same fields as `applications.AidAward`), copied from the SIS `StudentTermData` at submission so `review` keeps no dependency on `applications`.
 
 ### ledger
 
 | Signature | Success result | Fails with | Spec rule | Injected |
 |---|---|---|---|---|
+| `seed_fund(uow, *, fund_id, initial_capital, idempotency_key, actor, clock) -> LedgerEntry` | Fund created with one CAPITAL entry (CAPITAL → AVAILABLE), audited. Called at startup for `fund-main` and by test fixtures to set a starting balance | `FundAlreadySeeded` (different key), `IdempotencyKeyReused` | NFR-001.4 | uow (immediate), clock |
 | `available_balance(uow, *, fund_id) -> Money` | Derived from entries | `FundNotFound` | FR-002.6, FR-006.1 | uow |
 | `balances(uow, *, fund_id) -> FundBalances` | Initial capital, available, reserved, disbursed principal, repaid principal | `FundNotFound` | FR-006.1, NFR-001.4 | uow |
 | `reserve(uow, *, fund_id, application_id, amount, idempotency_key, actor, clock) -> LedgerEntry` | AVAILABLE → RESERVED, audited | `InsufficientFunds`, `IdempotencyKeyReused`, `FundNotFound` | FR-002.5, FR-006.1, NFR-001.1, NFR-001.2 | uow (immediate), clock |
@@ -186,7 +187,7 @@ Port `SisReaderPort.get_student_term_data(*, student_id, term_id) -> StudentTerm
 
 Base URL `http://localhost:8000/api`. Every route currently returns **501** with `{"error": "not_implemented", "message": "<METHOD> <path> maps to <function>, which is not implemented yet."}`.
 
-Authentication (prototype): header `X-Dev-User: u-student-1 | u-officer-1 | u-admin-1`. Money-moving POSTs require an `Idempotency-Key` header. Domain errors will map through `web.to_http_error`: not found → 404, forbidden → 403, validation/rule refusals → 422, state conflicts (lost compare-and-set, active application exists) → 409, `TryAgainLater` → 503.
+Authentication (prototype): header `X-Dev-User` with one of the seeded users (`u-student-1`, `u-student-2`, `u-student-3`, `u-officer-1`, `u-officer-2`, `u-admin-1`). Money-moving POSTs require an `Idempotency-Key` header. Domain errors will map through `web.to_http_error`: not found → 404, forbidden → 403, validation/rule refusals → 422, state conflicts (lost compare-and-set, active application exists) → 409, `TryAgainLater` → 503.
 
 ### Student
 
@@ -288,5 +289,6 @@ Every route currently returns 501.
 | Method & path | Function | Request | Success |
 |---|---|---|---|
 | `GET /students/{student_id}/terms/{term_id}` | `mock_sis.get_student_term` | — | 200 balance, aid awards, credits, SAP, hold, payment deadline |
+| `PUT /students/{student_id}/terms/{term_id}` *(test fixtures)* | `mock_sis.set_student_term` | `{tuition_balance, aid_awards: [{award_id, description, amount, accepted, disbursed}], enrollment_credits, sap_status, registration_hold, payment_deadline}` | 200 the stored record. `sap_status` is stored as sent, so a fixture can send an unrecognised value |
 | `POST /disbursement-credits` | `mock_sis.post_disbursement_credit` | `{student_id, term_id, amount}` + `Idempotency-Key` | 200 `{sis_transaction_id, posted_at}`; same key → same response |
 | `PUT /toggles` | `mock_sis.set_toggles` | `{outage, latency_ms, incomplete_data}` | 200 current toggles |
