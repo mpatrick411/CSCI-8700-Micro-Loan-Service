@@ -46,10 +46,10 @@ Each module has one responsibility. Modules talk to each other only through thei
 - **Identity.** The `identity.get_current_user()` FastAPI dependency plus `require_role(...)` on each route. Student-facing service functions take `student_id` from the resolved user, never from request parameters. `audit.append` requires an actor (a user ID or `system`).
 - **Concurrency.**
   - Decision and reservation run in one `BEGIN IMMEDIATE` transaction (NFR-001.1).
-  - A partial unique index on active LoanApplications/Loans per (student, term) enforces FR-001.6.
+  - A partial unique index on active LoanApplications/Loans per (student, term) enforces FR-001.6. Applications under appeal count as active, so an appeal is refused while another active application or loan exists for the term (FR-002.4).
   - Compare-and-set status updates (`UPDATE … WHERE status = 'pending_signature'`) mean a simultaneous sign and expire cannot both win.
   - Unique idempotency keys on ledger entries, payment credits and SIS postings satisfy NFR-001.2.
-- **Errors.** The SIS adapter turns timeout, transport error and incomplete payloads into one `SisUnavailable` error. `applications` maps it to "try again later" at start and submit (FR-001.4) and at officer approval (FR-003.6). Disbursement posting failures stay pending, and `jobs` retries them with the same idempotency key.
+- **Errors.** The SIS adapter turns timeout, transport error, incomplete payloads and unrecognised values (such as an unknown SAP status) into one `SisUnavailable` error. `applications` maps it to "try again later" at start and submit (FR-001.4) and at officer approval (FR-003.6). Officer denial does not call the SIS. Disbursement posting failures stay pending, and `jobs` retries them with the same idempotency key.
 
 ## 3. Request flow: student submits an application and is automatically approved
 
