@@ -12,7 +12,6 @@ triggers). Constructing the factory does no I/O.
 from __future__ import annotations
 
 import importlib
-import importlib.util
 import pkgutil
 import threading
 from dataclasses import dataclass, field
@@ -61,14 +60,16 @@ def _take_over_transaction_control(engine: Engine) -> None:
 
 
 def _import_all_tables_modules() -> None:
-    """Import `app.<module>.tables` for every module that has one, so its tables are on `metadata`."""
+    """Import `app.<module>.tables` for every domain module that has one, so its tables are on `metadata`.
+
+    Whether a module has a tables.py is checked on disk, without importing anything, so packages that
+    have none (such as `web`, `jobs` and `adapters`) are never imported from kernel.
+    """
     package = importlib.import_module(_APP_PACKAGE)
-    for module in pkgutil.iter_modules(package.__path__):
-        if not module.ispkg:
-            continue
-        name = f"{_APP_PACKAGE}.{module.name}.{_TABLES_MODULE}"
-        if importlib.util.find_spec(name) is not None:
-            importlib.import_module(name)
+    for package_dir in package.__path__:
+        for module in pkgutil.iter_modules([package_dir]):
+            if module.ispkg and (Path(package_dir) / module.name / f"{_TABLES_MODULE}.py").is_file():
+                importlib.import_module(f"{_APP_PACKAGE}.{module.name}.{_TABLES_MODULE}")
 
 
 def _ensure_sqlite_directory(database_url: str) -> None:

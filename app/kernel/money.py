@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 
 from app.kernel.errors import InvalidMoney
 
 _CENT = Decimal("0.01")
+# A plain decimal string: optional leading minus, digits, optionally a point and 1 or 2 digits (FR-001.3).
+# ASCII digits only; no exponent, no "+", no leading or trailing point.
+_PLAIN_DECIMAL = re.compile(r"-?[0-9]+(\.[0-9]{1,2})?")
 
 
 def _exact_cents(value: Decimal) -> Decimal:
@@ -32,12 +36,19 @@ class Money:
     def of(cls, value: str | int | Decimal) -> Money:
         """Build from a string, int or Decimal. Raises InvalidMoney for floats or more than 2 decimal places."""
         if isinstance(value, Decimal):
+            if value.is_finite() and value.as_tuple().exponent < -2:
+                raise InvalidMoney(f"{value} has more than two decimal places")
             decimal_value = value
         elif isinstance(value, int) and not isinstance(value, bool):
             decimal_value = Decimal(value)
         elif isinstance(value, str):
+            text = value.strip()
+            if not _PLAIN_DECIMAL.fullmatch(text):
+                raise InvalidMoney(
+                    f"{value!r} is not a valid amount: use digits with at most two decimal places, e.g. 600.00"
+                )
             try:
-                decimal_value = Decimal(value.strip())
+                decimal_value = Decimal(text)
             except InvalidOperation:
                 raise InvalidMoney(f"{value!r} is not a valid amount") from None
         else:

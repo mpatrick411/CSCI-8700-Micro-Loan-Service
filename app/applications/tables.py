@@ -7,9 +7,13 @@ Money inside it is a 2-place decimal string. Decisions are kept in their own tab
 
 from __future__ import annotations
 
-from sqlalchemy import Column, ForeignKey, Integer, String, Table, Text
+from sqlalchemy import Column, ForeignKey, Index, Integer, String, Table, Text
 
+from app.applications.models import ApplicationStatus
 from app.kernel.uow import metadata
+
+# Statuses that make an application active (FR-001.6): an application is active unless denied or expired.
+ACTIVE_STATUSES = (ApplicationStatus.UNDER_REVIEW.value, ApplicationStatus.APPROVED.value)
 
 applications = Table(
     "applications",
@@ -27,6 +31,15 @@ applications = Table(
     Column("review_id", String, nullable=True),
     Column("agreement_id", String, nullable=True),
     Column("idempotency_key", String, nullable=False, unique=True),
+)
+
+# At most one active application per student per term (FR-001.6), enforced under concurrent submits.
+Index(
+    "uq_applications_active_per_student_term",
+    applications.c.student_id,
+    applications.c.term_id,
+    unique=True,
+    sqlite_where=applications.c.status.in_(ACTIVE_STATUSES),
 )
 
 application_decisions = Table(

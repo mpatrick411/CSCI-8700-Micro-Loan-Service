@@ -52,7 +52,7 @@ Sources: `spec.md`, `architecture.md`, `contracts.md`, `test_plan.md`, the skele
 - **Skeleton to fill in:**
   - `web.to_http_error` (status per contracts Part 2, including `Unauthenticated` → 401 (DQ-3) and `InvalidMoney` → 422 `invalid_money` (DQ-7); body `{"error": code, "message": text}` with a non-empty message)
   - `applications.start`: map `SisUnavailable` → `TryAgainLater`; raise `NoTuitionGap` when gap < configured minimum
-  - `repayment.list_loans`, with `repayment/tables.py` (returns `[]` for now)
+  - `repayment.list_loans`, with `repayment/tables.py` (returns `[]` for now). The loans side of the DQ-1 partial unique index (one active loan per student and term, FR-001.6) is added with this table: slice 1 created only the applications side, because the loans table did not exist yet.
   - `review.list_open`, with `review/tables.py` (returns OPEN reviews; the sort order is untested, see "Leftovers")
   - `ledger.balances`
   - Routes: `GET /loans`, `GET /reviews`, `GET /funds/{fund_id}/balances`
@@ -302,3 +302,8 @@ No test in the suite contradicts the spec. These are weaknesses or traps for tes
 ## Next action
 
 Slice 1 (Walking skeleton): make `test_TP_AC01_01` pass.
+
+## Notes from slice 1 review
+
+- **Application idempotency keys must be unique per student, not globally** (for the submit slice, slice 4). Slice 1's `applications/tables.py` declares `idempotency_key` globally unique. Slice 4 must change that to a uniqueness on (`student_id`, `idempotency_key`), so one student's key can never collide with, or replay, another student's submission.
+- **`seed_fund` audit records have `rule_set_version` None**, because `ledger` cannot depend on `config` (architecture.md §2). This is intentional, not a missing value. TP-AUD checks that expect a rule version on every record must allow None for the fund seed.
