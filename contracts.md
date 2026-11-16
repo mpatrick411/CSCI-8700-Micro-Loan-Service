@@ -20,13 +20,15 @@ Every function below exists in code with this exact signature and raises `NotImp
 
 | Signature | Success result | Fails with | Spec rule | Injected |
 |---|---|---|---|---|
-| `Money.of(value: str \| int \| Decimal) -> Money` | Exact amount | `InvalidMoney` (float, >2 dp) | NFR-001.3 | — |
+| `Money.of(value: str \| int \| Decimal) -> Money` | Exact amount | `InvalidMoney` (float, >2 dp; at a route this maps to 422 `invalid_money`) | NFR-001.3, FR-001.3 | — |
 | `Money.from_cents(cents: int) -> Money` / `Money.to_cents() -> int` | Conversion to/from storage | — | NFR-001.3 | — |
 | `Money.zero() -> Money`, `+`, `-`, `<`, `<=`, `>`, `>=`, `is_positive() -> bool` | Exact arithmetic and comparison | — | NFR-001.3 | — |
 | `Clock.now() -> datetime` / `Clock.today() -> date` (Protocol; `SystemClock`, `AdjustableClock`) | UTC instant / institution-local date | — | all time-based FRs | — |
 | `AdjustableClock.advance(by: timedelta) -> datetime` | New `now()` | `ValueError` if `by` ≤ 0 | admin "advance time" (preference) | — |
 | `UnitOfWork` (Protocol): `session`, `__enter__`, `__exit__`, `commit()`, `rollback()` | Commit on clean exit, rollback on exception | SQLAlchemy errors propagate | NFR-001.1, NFR-003.1 | — |
-| `UnitOfWorkFactory.__call__(*, immediate: bool = False) -> UnitOfWork` (`SqliteUnitOfWorkFactory(database_url)`) | New unit of work | — | NFR-001.1 | database URL |
+| `UnitOfWorkFactory.__call__(*, immediate: bool = False) -> UnitOfWork` (`SqliteUnitOfWorkFactory(database_url)`) | New unit of work. The first call for a database creates the schema: every module's `tables.py` metadata, the audit UPDATE/DELETE triggers and the partial unique index on active applications/loans. Does nothing if the schema already exists | — | NFR-001.1, NFR-003.3, FR-001.6 | database URL |
+
+Schema ownership: each module may add a `tables.py` holding only its own SQLAlchemy tables, and only that module touches them. `SqliteUnitOfWorkFactory` creates them all lazily on first use, so `build_container` stays free of I/O.
 
 Also in kernel: typed ids (`StudentId`, `TermId`, `ApplicationId`, … , `Actor`, `SYSTEM_ACTOR`), `DomainError`, and `SisUnavailable`, the single error the SIS adapter raises for timeout, transport error, incomplete data or unrecognised values (e.g. an unknown SAP status, FR-001.4).
 
@@ -53,7 +55,7 @@ The table is protected by SQLite triggers that block UPDATE and DELETE (NFR-003.
 
 | Signature | Success result | Fails with | Spec rule | Injected |
 |---|---|---|---|---|
-| `get_current_user(request: Request) -> CurrentUser` (FastAPI dependency) | User named by the `X-Dev-User` header | `Unauthenticated` (missing or unknown) | NFR-002.2 | `IdentityProvider` from `app.state.container` |
+| `get_current_user(request: Request) -> CurrentUser` (FastAPI dependency) | User named by the `X-Dev-User` header | `Unauthenticated` (missing or unknown; HTTP 401) | NFR-002.2 | `IdentityProvider` from `app.state.container` |
 | `require_role(*roles: Role) -> Callable[..., CurrentUser]` | A dependency returning the user if their role is in `roles` | `Forbidden` (raised by the dependency) | NFR-002.2 | `get_current_user` |
 | `student_id_of(user: CurrentUser) -> StudentId` | The student's id | `Forbidden` if not a Student | NFR-002.2 | — |
 
@@ -75,9 +77,9 @@ Port `IdentityProvider`: `resolve(user_ref: str) -> CurrentUser | None`, `list_u
 
 | Signature | Success result | Fails with | Spec rule | Injected |
 |---|---|---|---|---|
-| `open(uow, *, kind, application_id, student_id, term_id, payment_deadline: date, requested_amount, tuition_gap, pending_aid_total, aid_awards: tuple[AidAwardView, ...], rule_outcomes: tuple[RuleOutcomeView, ...], student_explanation: str \| None, actor, clock) -> ExceptionReview` | OPEN review, audited. Gap, `aid_awards` and `rule_outcomes` are the snapshot from the application's submission | `ReviewAlreadyOpen` | FR-002.2 (escalate), FR-002.4 (appeal), FR-003.1 | uow, clock |
-| `get(uow, *, review_id) -> ExceptionReview` | The review | `ReviewNotFound` | FR-003.1 | uow |
-| `list_open(uow) -> list[ExceptionReview]` | All OPEN reviews of both kinds, earliest `payment_deadline` first, ties by earliest `opened_at`; each carries the tuition gap, `aid_awards`, and every rule outcome that is Escalate or Fail | — | FR-003.1 | uow |
+| `open(uow, *, kind, application_id, student_id, term_id, payment_deadline: date, requested_amount, tuition_gap, pending_aid_total, aid_awards: tuple[AidAwardView, ...], rule_outcomes: tuple[RuleOutcomeView, ...], student_explanation: str \| None, actor, clock) -> ExceptionReview` | OPEN review, audited. Gap, `aid_awards` and `rule_outcomes` are the snapshot from the application's submission; `rule_outcomes` holds all four rule outcomes, as passed by `applications` | `ReviewAlreadyOpen` | FR-002.2 (escalate), FR-002.4 (appeal), FR-003.1 | uow, clock |
+| `get(uow, *, review_id) -> ExceptionReview` | The review, with `rule_outcomes` filtered on read to the outcomes that are Escalate or Fail | `ReviewNotFound` | FR-003.1 | uow |
+| `list_open(uow) -> list[ExceptionReview]` | All OPEN reviews of both kinds, earliest `payment_deadline` first, ties by earliest `opened_at`; each carries the tuition gap, `aid_awards`, and every rule outcome that is Escalate or Fail (filtered on read; the stored review keeps all four) | — | FR-003.1 | uow |
 | `resolve(uow, *, review_id, decision: ReviewDecision, rationale: str, officer_id: UserId, clock) -> ExceptionReview` | Compare-and-set OPEN → RESOLVED | `MissingRationale` (blank or whitespace-only), `ReviewNotOpen` (lost the race), `ReviewNotFound` | FR-003.2 | uow, clock |
 | `find_expired(uow, *, clock) -> list[ExceptionReview]` | OPEN reviews whose `payment_deadline` is before `clock.today()` (the deadline date itself is still open) | — | FR-003.5 | uow, clock |
 | `expire(uow, *, review_id, actor, clock) -> ExceptionReview` | Compare-and-set OPEN → EXPIRED | `ReviewNotOpen`, `ReviewNotFound` | FR-003.5 | uow, clock |
@@ -88,7 +90,7 @@ Port `IdentityProvider`: `resolve(user_ref: str) -> CurrentUser | None`, `list_u
 
 | Signature | Success result | Fails with | Spec rule | Injected |
 |---|---|---|---|---|
-| `seed_fund(uow, *, fund_id, initial_capital, idempotency_key, actor, clock) -> LedgerEntry` | Fund created with one CAPITAL entry (CAPITAL → AVAILABLE), audited. Called at startup for `fund-main` and by test fixtures to set a starting balance | `FundAlreadySeeded` (different key), `IdempotencyKeyReused` | NFR-001.4 | uow (immediate), clock |
+| `seed_fund(uow, *, fund_id, initial_capital, idempotency_key, actor, clock) -> LedgerEntry` | Fund created with one CAPITAL entry (CAPITAL → AVAILABLE), audited. Called at startup for `fund-main` with $10,000.00 only when the env var `SEED_DEFAULT_FUND=1` is set (off by default; only `docker-compose.yml` sets it, for the demo; tests never do), and by test fixtures to set a starting balance | `FundAlreadySeeded` (different key), `IdempotencyKeyReused` | NFR-001.4 | uow (immediate), clock |
 | `available_balance(uow, *, fund_id) -> Money` | Derived from entries | `FundNotFound` | FR-002.6, FR-006.1 | uow |
 | `balances(uow, *, fund_id) -> FundBalances` | Initial capital, available, reserved, disbursed principal, repaid principal | `FundNotFound` | FR-006.1, NFR-001.4 | uow |
 | `reserve(uow, *, fund_id, application_id, amount, idempotency_key, actor, clock) -> LedgerEntry` | AVAILABLE → RESERVED, audited | `InsufficientFunds`, `IdempotencyKeyReused`, `FundNotFound` | FR-002.5, FR-006.1, NFR-001.1, NFR-001.2 | uow (immediate), clock |
@@ -150,12 +152,12 @@ Port `ESignaturePort.render(agreement) -> RenderedDocument`, `ESignaturePort.cap
 | `calculate_tuition_gap(data: StudentTermData) -> Money` | Balance − accepted, undisbursed aid (pure; may be ≤ 0) | — | FR-001.1 | — |
 | `validate_amount(uow, *, requested_amount, tuition_gap) -> AmountValidation` | `ok`, or `message` such as "exceeds your tuition gap of $600" | — (bad amounts are a result) | FR-001.3, AC-01 | uow, config |
 | `start(*, uow_factory, sis: SisReaderPort, student_id, term_id) -> ApplicationStart` | Gap, pending aid, min, `max_requestable = min(gap, max)`, deadline. Creates nothing | `TryAgainLater`, `NoTuitionGap` (gap < configured minimum loan amount), `ActiveApplicationExists` | FR-001.1, FR-001.2, FR-001.4, FR-001.6, AC-01 | uow_factory, sis, config |
-| `submit(*, uow_factory, sis, clock, student_id, term_id, requested_amount, idempotency_key) -> SubmissionResult` | Application + decision; approved → reservation + agreement; escalated → review; denied → reasons | `TryAgainLater`, `NoTuitionGap` (recalculated gap < configured minimum), `AmountOutOfRange`, `ActiveApplicationExists` | FR-001.2–001.6, FR-002.1–002.3, FR-002.5, FR-002.6, FR-004.1, FR-006.1, NFR-001.1, NFR-001.2, NFR-003.4, NFR-005.1 | uow_factory (immediate), clock, sis, config |
+| `submit(*, uow_factory, sis, clock, student_id, term_id, requested_amount, idempotency_key) -> SubmissionResult` | Application + decision; approved → reservation + agreement; escalated → review (all four rule outcomes passed to `review.open`); denied → reasons | `TryAgainLater`, `NoTuitionGap` (recalculated gap < configured minimum), `AmountOutOfRange`, `ActiveApplicationExists` | FR-001.2–001.6, FR-002.1–002.3, FR-002.5, FR-002.6, FR-004.1, FR-006.1, NFR-001.1, NFR-001.2, NFR-003.4, NFR-005.1 | uow_factory (immediate), clock, sis, config |
 | `decide(assessment) -> DecisionOutcome` | Fail → DENIED; else Escalate → ESCALATED; else APPROVED (pure) | — | FR-002.2 | — |
 | `denial_reasons(assessment) -> tuple[str, ...]` | Reason of every failed rule (pure) | — | FR-002.3 | — |
 | `get(uow, *, application_id, student_id: StudentId \| None) -> LoanApplication` | Application with assessment and decisions | `ApplicationNotFound` | NFR-002.2 | uow |
 | `list_for_student(uow, *, student_id) -> list[LoanApplication]` | Student's applications | — | NFR-002.2 | uow |
-| `appeal(uow, *, application_id, student_id, explanation: str \| None, clock) -> ExceptionReview` | APPEAL review with original outcomes; status UNDER_REVIEW | `ApplicationNotDenied`, `AppealWindowClosed` (now > decided_at + window), `AppealAlreadyUsed`, `ActiveApplicationExists` (another active application or loan for the term), `ApplicationNotFound` | FR-002.4 | uow (immediate), clock, config |
+| `appeal(uow, *, application_id, student_id, explanation: str \| None, clock) -> ExceptionReview` | APPEAL review with all four original outcomes; status UNDER_REVIEW | `ApplicationNotDenied`, `AppealWindowClosed` (now > decided_at + window), `AppealAlreadyUsed`, `ActiveApplicationExists` (another active application or loan for the term), `ApplicationNotFound` | FR-002.4 | uow (immediate), clock, config |
 | `resolve_review(*, uow_factory, sis, clock, review_id, officer_id: UserId, decision: ReviewDecision, rationale: str) -> Decision` | Officer decision recorded and audited; approve → SIS re-read, reservation + agreement; deny → no SIS call | `MissingRationale`, `ReviewNotOpen`, `ReviewNotFound`, `PaymentDeadlinePassed`, `TryAgainLater` (approve only), `AmountExceedsRecalculatedGap`, `FundCannotCover` (live balance, FR-003.3) | FR-003.2–003.6, FR-006.1 | uow_factory (immediate), clock, sis |
 | `expire_overdue_reviews(*, uow_factory, clock) -> list[ApplicationId]` | Reviews expired, applications denied with "Review not completed before the payment deadline." | — | FR-003.5 | uow_factory, clock |
 | `expire_unsigned(*, uow_factory, clock) -> list[ApplicationId]` | Agreements expired, applications EXPIRED, reservations released | — | FR-004.3, FR-002.5 | uow_factory, clock |
@@ -177,7 +179,9 @@ Port `SisReaderPort.get_student_term_data(*, student_id, term_id) -> StudentTerm
 
 | Signature | Success result | Fails with | Spec rule | Injected |
 |---|---|---|---|---|
-| `to_http_error(exc: DomainError) -> tuple[int, dict[str, str]]` | `(status, {"error": code, "message": user text})` | — | FR-001.4, FR-003.6, AC-01 messages | — |
+| `to_http_error(exc: DomainError) -> tuple[int, dict[str, str]]` | `(status, {"error": code, "message": user text})`, per the Part 2 mapping, including `Unauthenticated` → 401 and `InvalidMoney` → 422 `invalid_money` | — | FR-001.4, FR-003.6, AC-01 messages, NFR-002.2 | — |
+| `domain_error_handler(request, exc: DomainError) -> JSONResponse` (registered by `create_app`) | The `(status, body)` from `to_http_error` as a JSON response | — | FR-001.4, FR-003.6, NFR-002.2 | — |
+| `to_jsonable(value: Any) -> Any` | JSON-ready data: `Money` → decimal string with 2 places (`"600.00"`); `datetime` → ISO 8601 with offset; `date` → ISO date; enums → their value; dataclasses, tuples, lists and mappings recursively. Implements the "Money" convention. FastAPI's own encoder runs before any response class, so a route returns `JSONResponse(to_jsonable(result), status_code=...)` and passes its status explicitly | — | NFR-001.3 | — |
 | `not_implemented_handler(request, exc) -> JSONResponse` *(skeleton only, implemented)* | 501 `{"error": "not_implemented", "message": ...}` | — | — | — |
 | `get_container(request) -> Container` *(implemented)* | Adapters chosen at startup | — | — | — |
 
@@ -187,7 +191,7 @@ Port `SisReaderPort.get_student_term_data(*, student_id, term_id) -> StudentTerm
 
 Base URL `http://localhost:8000/api`. Every route currently returns **501** with `{"error": "not_implemented", "message": "<METHOD> <path> maps to <function>, which is not implemented yet."}`.
 
-Authentication (prototype): header `X-Dev-User` with one of the seeded users (`u-student-1`, `u-student-2`, `u-student-3`, `u-officer-1`, `u-officer-2`, `u-admin-1`). Money-moving POSTs require an `Idempotency-Key` header. Domain errors will map through `web.to_http_error`: not found → 404, forbidden → 403, validation/rule refusals → 422, state conflicts (lost compare-and-set, active application exists) → 409, `TryAgainLater` → 503.
+Authentication (prototype): header `X-Dev-User` with one of the seeded users (`u-student-1`, `u-student-2`, `u-student-3`, `u-officer-1`, `u-officer-2`, `u-admin-1`). Money-moving POSTs require an `Idempotency-Key` header. Domain errors will map through `web.to_http_error` (via the DomainError handler that `create_app` registers): unauthenticated → 401, not found → 404, forbidden → 403, validation/rule refusals → 422 (including `InvalidMoney` → 422 `invalid_money` for an amount with more than two decimal places), state conflicts (lost compare-and-set, active application exists) → 409, `TryAgainLater` → 503.
 
 ### Student
 
