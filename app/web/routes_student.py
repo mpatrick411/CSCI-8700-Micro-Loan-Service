@@ -141,7 +141,8 @@ def download_signed_agreement(agreement_id: str, user: StudentUser, c: Container
 @router.get("/loans", name="repayment.list_loans")
 def list_loans(user: StudentUser, c: ContainerDep):
     with c.uow_factory() as uow:
-        return repayment.list_loans(uow, student_id=student_id_of(user))
+        result = repayment.list_loans(uow, student_id=student_id_of(user))
+    return JSONResponse(to_jsonable(result), status_code=200)
 
 
 @router.get("/loans/{loan_id}", name="repayment.get_loan")

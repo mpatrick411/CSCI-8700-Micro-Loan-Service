@@ -44,7 +44,7 @@ class FundBalances:
     initial_capital: Money
     available: Money
     reserved: Money
-    disbursed_principal: Money  # outstanding: disbursed minus repaid
+    disbursed_principal: Money  # total ever disbursed; repayments do not reduce it (repaid_principal holds those)
     repaid_principal: Money
 
 

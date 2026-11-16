@@ -24,6 +24,7 @@ from app.applications.models import (
     StudentTermData,
     SubmissionResult,
 )
+from app.applications.errors import NoTuitionGap, TryAgainLater
 from app.applications.ports import SisReaderPort
 from app.applications.tables import application_decisions, applications
 from app.eligibility import (
@@ -43,6 +44,7 @@ from app.kernel import (
     IdempotencyKey,
     Money,
     ReviewId,
+    SisUnavailable,
     StudentId,
     TermId,
     UnitOfWork,
@@ -133,6 +135,23 @@ def _pending_aid_total(data: StudentTermData) -> Money:
     return total
 
 
+def _read_sis(sis: SisReaderPort, *, student_id: StudentId, term_id: TermId) -> StudentTermData:
+    """One SIS read; any SisUnavailable becomes TryAgainLater for the student (FR-001.4, NFR-005.2)."""
+    try:
+        return sis.get_student_term_data(student_id=student_id, term_id=term_id)
+    except SisUnavailable as exc:
+        raise TryAgainLater(
+            "We could not reach the student information system to check your tuition balance. "
+            "Please try again later."
+        ) from exc
+
+
+def _usd(amount: Money) -> str:
+    """User-facing dollar text, e.g. "$99.99" or "-$400.00"."""
+    sign = "-" if amount.amount < 0 else ""
+    return f"{sign}${abs(amount.amount):,.2f}"
+
+
 # --- Public service functions --------------------------------------------------------------------
 
 
@@ -153,13 +172,21 @@ def start(
     student_id: StudentId,
     term_id: TermId,
 ) -> ApplicationStart:
-    """Read the SIS, calculate the gap and limits. Creates nothing (FR-001.6)."""
+    """Read the SIS, calculate the gap and limits. Creates nothing (FR-001.6).
+
+    Raises TryAgainLater if the SIS is unavailable (FR-001.4) and NoTuitionGap if the gap is less than the
+    configured minimum loan amount (FR-001.1)."""
     # The SIS call happens before any transaction opens.
-    data = sis.get_student_term_data(student_id=student_id, term_id=term_id)
+    data = _read_sis(sis, student_id=student_id, term_id=term_id)
     pending_aid_total = _pending_aid_total(data)
     tuition_gap = calculate_tuition_gap(data)
     with uow_factory() as uow:
         settings = config.current(uow)
+    if tuition_gap < settings.loan_min_amount:
+        raise NoTuitionGap(
+            f"Your tuition gap of {_usd(tuition_gap)} is less than the minimum loan amount of "
+            f"{_usd(settings.loan_min_amount)}, so you cannot start a loan application for this term."
+        )
     max_requestable = min(tuition_gap, settings.loan_max_amount)
     return ApplicationStart(
         term_id=term_id,

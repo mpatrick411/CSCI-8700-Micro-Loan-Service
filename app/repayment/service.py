@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Any
+
+from sqlalchemy import select
 
 from app.kernel import (
     Actor,
@@ -18,11 +21,28 @@ from app.repayment.models import (
     AutopayEnrollment,
     Installment,
     Loan,
+    LoanStatus,
     Payment,
     PaymentMethodToken,
     RepaymentSchedule,
 )
 from app.repayment.ports import NotificationsPort, PaymentsPort
+from app.repayment.tables import loans
+
+
+def _loan_from_row(row: Any) -> Loan:
+    return Loan(
+        loan_id=LoanId(row.loan_id),
+        application_id=ApplicationId(row.application_id),
+        student_id=StudentId(row.student_id),
+        term_id=TermId(row.term_id),
+        fund_id=FundId(row.fund_id),
+        principal=Money.from_cents(row.principal_cents),
+        outstanding=Money.from_cents(row.outstanding_cents),
+        status=LoanStatus(row.status),
+        flagged_for_follow_up=row.flagged_for_follow_up,
+        created_at=datetime.fromisoformat(row.created_at),
+    )
 
 
 def split_installments(principal: Money, count: int) -> tuple[Money, ...]:
@@ -64,7 +84,11 @@ def get_loan(uow: UnitOfWork, *, loan_id: LoanId, student_id: StudentId | None) 
 
 
 def list_loans(uow: UnitOfWork, *, student_id: StudentId) -> list[Loan]:
-    raise NotImplementedError("repayment.list_loans")
+    """The student's own loans, oldest first (NFR-002.2)."""
+    rows = uow.session.execute(
+        select(loans).where(loans.c.student_id == student_id).order_by(loans.c.created_at, loans.c.loan_id)
+    ).all()
+    return [_loan_from_row(row) for row in rows]
 
 
 def get_schedule(uow: UnitOfWork, *, loan_id: LoanId, student_id: StudentId) -> RepaymentSchedule:
