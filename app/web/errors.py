@@ -24,6 +24,12 @@ async def not_implemented_handler(request: Request, exc: Exception) -> JSONRespo
     )
 
 
+async def domain_error_handler(request: Request, exc: DomainError) -> JSONResponse:
+    """Registered by create_app for every DomainError: the (status, body) from to_http_error as JSON."""
+    status, body = to_http_error(exc)
+    return JSONResponse(status_code=status, content=body)
+
+
 def to_http_error(exc: DomainError) -> tuple[int, dict[str, str]]:
     """Map a DomainError to (HTTP status, {"error": exc.code, "message": user-facing text}).
 

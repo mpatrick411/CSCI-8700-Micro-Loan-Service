@@ -5,13 +5,14 @@ from __future__ import annotations
 from typing import Annotated
 
 from fastapi import APIRouter, Header, Response
+from fastapi.responses import JSONResponse
 
 from app import agreements, applications, disbursement, repayment
 from app.agreements import ConsentInput
 from app.kernel import Actor, AgreementId, ApplicationId, IdempotencyKey, LoanId, Money, TermId
 from app.identity import student_id_of
 from app.repayment import PaymentMethodToken
-from app.web.deps import ContainerDep, StudentUser
+from app.web.deps import ContainerDep, StudentUser, to_jsonable
 from app.web.schemas import (
     AppealRequest,
     AutopayRequest,
@@ -30,9 +31,10 @@ IdempotencyHeader = Annotated[str, Header(alias="Idempotency-Key")]
 
 @router.get("/terms/{term_id}/application-start", name="applications.start")
 def start_application(term_id: str, user: StudentUser, c: ContainerDep):
-    return applications.start(
+    result = applications.start(
         uow_factory=c.uow_factory, sis=c.sis, student_id=student_id_of(user), term_id=TermId(term_id)
     )
+    return JSONResponse(to_jsonable(result), status_code=200)
 
 
 @router.post("/applications/validate-amount", name="applications.validate_amount")
@@ -61,7 +63,8 @@ def submit_application(
 @router.get("/applications", name="applications.list_for_student")
 def list_applications(user: StudentUser, c: ContainerDep):
     with c.uow_factory() as uow:
-        return applications.list_for_student(uow, student_id=student_id_of(user))
+        result = applications.list_for_student(uow, student_id=student_id_of(user))
+    return JSONResponse(to_jsonable(result), status_code=200)
 
 
 @router.get("/applications/{application_id}", name="applications.get")
