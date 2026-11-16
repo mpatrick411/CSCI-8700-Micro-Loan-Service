@@ -25,7 +25,7 @@ class SeededIdentityProvider:
     users: tuple[CurrentUser, ...] = SEEDED_USERS
 
     def resolve(self, user_ref: str) -> CurrentUser | None:
-        raise NotImplementedError("adapters.SeededIdentityProvider.resolve")
+        return next((user for user in self.users if user.user_id == user_ref), None)
 
     def list_users(self) -> list[CurrentUser]:
         raise NotImplementedError("adapters.SeededIdentityProvider.list_users")

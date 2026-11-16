@@ -12,8 +12,9 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from app.container import build_container
+from app.kernel import DomainError
 from app.web import api_router
-from app.web.errors import not_implemented_handler
+from app.web.errors import domain_error_handler, not_implemented_handler
 
 
 @asynccontextmanager
@@ -25,6 +26,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 def create_app() -> FastAPI:
     app = FastAPI(title="Tuition Gap Micro-Loan Service", version="0.1.0-skeleton", lifespan=lifespan)
     app.add_exception_handler(NotImplementedError, not_implemented_handler)
+    app.add_exception_handler(DomainError, domain_error_handler)
     app.include_router(api_router)
     return app
 
