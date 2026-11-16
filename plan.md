@@ -303,7 +303,9 @@ No test in the suite contradicts the spec. These are weaknesses or traps for tes
 
 Slice 1 (Walking skeleton): make `test_TP_AC01_01` pass.
 
-## Notes from slice 1 review
+## Review notes
 
 - **Application idempotency keys must be unique per student, not globally** (for the submit slice, slice 4). Slice 1's `applications/tables.py` declares `idempotency_key` globally unique. Slice 4 must change that to a uniqueness on (`student_id`, `idempotency_key`), so one student's key can never collide with, or replay, another student's submission.
 - **`seed_fund` audit records have `rule_set_version` None**, because `ledger` cannot depend on `config` (architecture.md §2). This is intentional, not a missing value. TP-AUD checks that expect a rule version on every record must allow None for the fund seed.
+- **`review.list_open` does not filter to Escalate/Fail yet** (from slice 2). It returns every stored rule outcome. Slice 9 adds the filter on read (DQ-4). No review can exist before slice 9, so nothing visible changes until then.
+- **`Loan.outstanding` is stored as a column** (`outstanding_cents` in `repayment/tables.py`, from slice 2). The repayment slices should decide whether to keep it stored or derive it from the installments.

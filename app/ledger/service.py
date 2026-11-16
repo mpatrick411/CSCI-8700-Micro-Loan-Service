@@ -21,7 +21,7 @@ from app.kernel import (
     PaymentId,
     UnitOfWork,
 )
-from app.ledger.errors import FundAlreadySeeded, IdempotencyKeyReused
+from app.ledger.errors import FundAlreadySeeded, FundNotFound, IdempotencyKeyReused
 from app.ledger.models import EntryKind, FundBalances, InvariantReport, LedgerAccount, LedgerEntry
 from app.ledger.tables import ledger_entries
 
@@ -147,7 +147,38 @@ def available_balance(uow: UnitOfWork, *, fund_id: FundId) -> Money:
 
 
 def balances(uow: UnitOfWork, *, fund_id: FundId) -> FundBalances:
-    raise NotImplementedError("ledger.balances")
+    """Every figure is derived from the fund's entries (NFR-001.4). Raises FundNotFound if the fund has none."""
+    rows = uow.session.execute(
+        select(
+            ledger_entries.c.kind,
+            ledger_entries.c.debit_account,
+            ledger_entries.c.credit_account,
+            ledger_entries.c.amount_cents,
+        ).where(ledger_entries.c.fund_id == fund_id)
+    ).all()
+    if not rows:
+        raise FundNotFound(f"There is no loan fund {fund_id!r}.")
+
+    # Net cents held by each account: entries moving money in, minus entries moving it out.
+    held = {account: 0 for account in LedgerAccount}
+    capital_cents = repaid_cents = 0
+    for row in rows:
+        held[LedgerAccount(row.debit_account)] += row.amount_cents
+        held[LedgerAccount(row.credit_account)] -= row.amount_cents
+        kind = EntryKind(row.kind)
+        if kind == EntryKind.CAPITAL:
+            capital_cents += row.amount_cents
+        elif kind == EntryKind.REPAYMENT:
+            repaid_cents += row.amount_cents
+
+    return FundBalances(
+        fund_id=fund_id,
+        initial_capital=Money.from_cents(capital_cents),
+        available=Money.from_cents(held[LedgerAccount.AVAILABLE]),
+        reserved=Money.from_cents(held[LedgerAccount.RESERVED]),
+        disbursed_principal=Money.from_cents(held[LedgerAccount.DISBURSED_PRINCIPAL]),
+        repaid_principal=Money.from_cents(repaid_cents),
+    )
 
 
 def reserve(

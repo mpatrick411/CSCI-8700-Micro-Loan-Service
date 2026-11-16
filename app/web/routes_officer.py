@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Query
+from fastapi.responses import JSONResponse
 
 from app import applications, audit, ledger, repayment, review
 from app.kernel import FundId, ReviewId
-from app.web.deps import ContainerDep, OfficerOrAdmin, OfficerUser
+from app.web.deps import ContainerDep, OfficerOrAdmin, OfficerUser, to_jsonable
 from app.web.schemas import ResolveReviewRequest
 
 router = APIRouter(tags=["officer"])
@@ -15,7 +16,8 @@ router = APIRouter(tags=["officer"])
 @router.get("/reviews", name="review.list_open")
 def list_open_reviews(user: OfficerUser, c: ContainerDep):
     with c.uow_factory() as uow:
-        return review.list_open(uow)
+        result = review.list_open(uow)
+    return JSONResponse(to_jsonable(result), status_code=200)
 
 
 @router.get("/reviews/{review_id}", name="review.get")
@@ -46,7 +48,8 @@ def list_flagged_loans(user: OfficerUser, c: ContainerDep):
 @router.get("/funds/{fund_id}/balances", name="ledger.balances")
 def fund_balances(fund_id: str, user: OfficerOrAdmin, c: ContainerDep):
     with c.uow_factory() as uow:
-        return ledger.balances(uow, fund_id=FundId(fund_id))
+        result = ledger.balances(uow, fund_id=FundId(fund_id))
+    return JSONResponse(to_jsonable(result), status_code=200)
 
 
 @router.get("/funds/{fund_id}/invariant", name="ledger.verify_invariant")
