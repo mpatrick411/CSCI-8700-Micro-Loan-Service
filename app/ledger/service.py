@@ -161,23 +161,20 @@ def balances(uow: UnitOfWork, *, fund_id: FundId) -> FundBalances:
 
     # Net cents held by each account: entries moving money in, minus entries moving it out.
     held = {account: 0 for account in LedgerAccount}
-    capital_cents = repaid_cents = 0
+    # Running totals per entry kind: capital, total ever disbursed, total ever repaid (NFR-001.4).
+    total_by_kind = {kind: 0 for kind in EntryKind}
     for row in rows:
         held[LedgerAccount(row.debit_account)] += row.amount_cents
         held[LedgerAccount(row.credit_account)] -= row.amount_cents
-        kind = EntryKind(row.kind)
-        if kind == EntryKind.CAPITAL:
-            capital_cents += row.amount_cents
-        elif kind == EntryKind.REPAYMENT:
-            repaid_cents += row.amount_cents
+        total_by_kind[EntryKind(row.kind)] += row.amount_cents
 
     return FundBalances(
         fund_id=fund_id,
-        initial_capital=Money.from_cents(capital_cents),
+        initial_capital=Money.from_cents(total_by_kind[EntryKind.CAPITAL]),
         available=Money.from_cents(held[LedgerAccount.AVAILABLE]),
         reserved=Money.from_cents(held[LedgerAccount.RESERVED]),
-        disbursed_principal=Money.from_cents(held[LedgerAccount.DISBURSED_PRINCIPAL]),
-        repaid_principal=Money.from_cents(repaid_cents),
+        disbursed_principal=Money.from_cents(total_by_kind[EntryKind.DISBURSE]),
+        repaid_principal=Money.from_cents(total_by_kind[EntryKind.REPAYMENT]),
     )
 
 
