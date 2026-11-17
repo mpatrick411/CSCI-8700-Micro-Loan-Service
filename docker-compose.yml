@@ -6,6 +6,7 @@ services:
     environment:
       DATABASE_URL: sqlite:////srv/data/loans.db
       SIS_BASE_URL: http://mock-sis:8001
+      SEED_DEFAULT_FUND: "1"
     volumes:
       - loans-data:/srv/data
     depends_on:

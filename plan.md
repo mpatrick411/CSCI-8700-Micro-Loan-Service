@@ -75,7 +75,8 @@ Sources: `spec.md`, `architecture.md`, `contracts.md`, `test_plan.md`, the skele
 - **Depends on:** 1
 - **Done when:** with the app and the mock SIS running, a manual check in `/docs` shows a PUT of S1001's SIS data, then GET application-start returning gap `"600.00"`; and the full test suite shows no newly failing test.
 - **Status:** not started
-- **Watch for:** `AdjustableClock.today()` needs the institution's time zone, which the spec does not give (test_plan G-17). The test fixture uses America/Chicago.
+- **Design decisions:** DQ-8 (institution time zone), DQ-9 (incomplete data shape), DQ-10 (mock SIS status codes), resolved below.
+- **Watch for:** `AdjustableClock.today()` needs the institution's time zone, which the spec does not give (test_plan G-17). The test fixture uses America/Chicago (DQ-8).
 
 ## Slice 4: Automatic approval (submit → assess → reserve → agreement)
 
@@ -288,6 +289,12 @@ Test-plan rows with no test in the suite yet include SIS-02 to 08, ONE-01 to 03 
   - **Resolved:** yes. Added as slice 3 (Demo wiring), after slices 1 and 2; the later slices are renumbered 4–12. It depends on slice 1. Done when: with the app and mock SIS running, a manual check in `/docs` shows a PUT of S1001's SIS data, then GET application-start returning gap `"600.00"`, and the full test suite still shows no newly failing test.
 - **DQ-7. More than two decimal places at the route.** Routes call `Money.of(...)` before the service, so `"599.995"` raises `InvalidMoney` (code `invalid_money`). It never reaches `validate_amount`, which per the contracts "never raises for a bad amount". No current test covers this (TP-AMT-08 is not written yet), but the mapping needs a decision before it is.
   - **Resolved:** `InvalidMoney` maps to 422 with code `invalid_money` at the route. Recorded in contracts.md (the `Money.of` row, `to_http_error` and the Part 2 error mapping), so TP-AMT-08 can expect 422 `invalid_money` when it is written. Filled in `to_http_error` in slice 2.
+- **DQ-8. Institution time zone for `AdjustableClock.today()`.** The spec never names the institution's time zone (test_plan G-17), but `today()` must return the institution-local date.
+  - **Resolved:** a kernel constant `INSTITUTION_TZ = ZoneInfo("America/Chicago")` in `kernel/clock.py`, the same zone as the test fixture. No new option or dependency. Built in slice 3.
+- **DQ-9. What does the mock SIS `incomplete_data` toggle leave out?** contracts.md does not say.
+  - **Resolved:** when `incomplete_data` is on, the mock SIS returns the normal record with `payment_deadline` omitted. `HttpSisAdapter` treats any missing required field as incomplete data and raises `SisUnavailable`. Built in slice 3.
+- **DQ-10. Mock SIS status codes for a missing record and an outage.** contracts.md does not say.
+  - **Resolved:** `GET` for a student/term with no stored record returns 404; any `GET` while `outage` is on returns 503. `HttpSisAdapter` treats any non-200 as `SisUnavailable`, so the app answers 503 `sis_try_again_later` in both cases. Built in slice 3.
 
 ## Test issues
 

@@ -3,8 +3,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from typing import Protocol
+from zoneinfo import ZoneInfo
+
+# The spec does not name the institution's time zone (test_plan G-17); resolved as plan.md DQ-8.
+INSTITUTION_TZ = ZoneInfo("America/Chicago")
 
 
 class Clock(Protocol):
@@ -35,10 +39,10 @@ class AdjustableClock:
     offset: timedelta = field(default_factory=timedelta)
 
     def now(self) -> datetime:
-        raise NotImplementedError("kernel.AdjustableClock.now")
+        return datetime.now(timezone.utc) + self.offset
 
     def today(self) -> date:
-        raise NotImplementedError("kernel.AdjustableClock.today")
+        return self.now().astimezone(INSTITUTION_TZ).date()
 
     def advance(self, by: timedelta) -> datetime:
         """Move the clock forward by `by` (must be positive). Returns the new now()."""
